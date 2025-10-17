@@ -115,7 +115,12 @@ def train(
 
             step_optimizer.zero_grad()
             model.train()
-            loss = model.loss_criterion(model(examples), labels)
+            model_examples = model(examples)
+            #print("-- model_examples:" + str(model_examples.shape))
+            #print("-- labels:" + str(labels.shape))
+            #print("-- model_example concrete:" + str(model_examples[0][0]))
+            #print("-- label concrete:" + str(labels[0]))
+            loss = model.loss_criterion(model_examples, labels)
             if training_hparams.apex_fp16:
                 with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()

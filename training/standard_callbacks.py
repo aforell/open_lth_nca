@@ -12,6 +12,13 @@ from foundations.step import Step
 from platforms.platform import get_platform
 from training import checkpointing
 
+import numpy as np
+from sklearn.metrics import (
+    accuracy_score, f1_score, log_loss,
+    average_precision_score, roc_auc_score,
+    confusion_matrix, brier_score_loss
+)
+
 
 # Standard callbacks.
 def save_model(output_location, step, model, optimizer, logger):
@@ -40,11 +47,14 @@ def create_eval_callback(eval_name: str, loader: DataLoader, verbose=False):
     """This function returns a callback."""
 
     time_of_last_call = None
+    total_time = None
+    max_vram_alloc = None
 
     def eval_callback(output_location, step, model, optimizer, logger):
         example_count = torch.tensor(0.0).to(get_platform().torch_device)
         total_loss = torch.tensor(0.0).to(get_platform().torch_device)
         total_correct = torch.tensor(0.0).to(get_platform().torch_device)
+        all_probs, all_labels = [], []
 
         def correct(labels, outputs):
             return torch.sum(torch.eq(labels, output.argmax(dim=1)))
@@ -56,6 +66,10 @@ def create_eval_callback(eval_name: str, loader: DataLoader, verbose=False):
                 examples = examples.to(get_platform().torch_device)
                 labels = labels.squeeze().to(get_platform().torch_device)
                 output = model(examples)
+
+                probs = torch.softmax(output, dim=1)
+                all_probs.append(probs.cpu())
+                all_labels.append(labels.cpu())
 
                 labels_size = torch.tensor(len(labels), device=get_platform().torch_device)
                 example_count += labels_size
@@ -72,18 +86,49 @@ def create_eval_callback(eval_name: str, loader: DataLoader, verbose=False):
         total_correct = total_correct.cpu().item()
         example_count = example_count.cpu().item()
 
+        #TODO check metrics for segmentation
+
+        # Convert to numpy
+        probs = torch.cat(all_probs).numpy()
+        labels = torch.cat(all_labels).numpy()
+        preds = probs.argmax(axis=1)
+        print("probs shape:", probs.shape)
+        print("labels shape:", labels.shape)
+
+        # Metrics
+        macro_f1 = f1_score(labels, preds, average="macro")
+        #pr_auc = average_precision_score(labels, probs, average="macro")
+        #roc_auc = roc_auc_score(labels, probs, multi_class="ovr", average="macro")
+
+        # Efficiency
+        n_params = sum(p.numel() for p in model.parameters())
+        vram_alloc = torch.cuda.max_memory_allocated(device=get_platform().torch_device) / 1024**2 if torch.cuda.is_available() else 0
+        nonlocal max_vram_alloc
+        max_vram_alloc = vram_alloc if max_vram_alloc is None else max(max_vram_alloc, vram_alloc)
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
         if get_platform().is_primary_process:
             logger.add('{}_loss'.format(eval_name), step, total_loss / example_count)
             logger.add('{}_accuracy'.format(eval_name), step, total_correct / example_count)
             logger.add('{}_examples'.format(eval_name), step, example_count)
+            logger.add('{}_macro_f1'.format(eval_name), step, macro_f1)
+            #logger.add('{}_pr_auc'.format(eval_name), step, pr_auc)
+            #logger.add('{}_roc_auc'.format(eval_name), step, roc_auc)
+            logger.add('{}_vram_alloc'.format(eval_name), step, vram_alloc)
+            logger.add('{}_max_vram_alloc'.format(eval_name), step, max_vram_alloc)
+            logger.add('{}_n_params'.format(eval_name), step, n_params)
 
             if verbose:
                 nonlocal time_of_last_call
+                nonlocal total_time
                 elapsed = 0 if time_of_last_call is None else time.time() - time_of_last_call
                 print('{}\tep {:03d}\tit {:03d}\tloss {:.3f}\tacc {:.2f}%\tex {:d}\ttime {:.2f}s'.format(
                     eval_name, step.ep, step.it, total_loss/example_count, 100 * total_correct/example_count,
                     int(example_count), elapsed))
                 time_of_last_call = time.time()
+                total_time = 0 if total_time is None else total_time + elapsed
+                logger.add('{}_total_time'.format(eval_name), step, total_time)
 
     return eval_callback
 
