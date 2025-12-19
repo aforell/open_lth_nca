@@ -6,6 +6,8 @@
 import typing
 import warnings
 
+import torch
+
 from datasets.base import DataLoader
 import datasets.registry
 from foundations import hparams
@@ -115,12 +117,19 @@ def train(
 
             step_optimizer.zero_grad()
             model.train()
+            loss_parameters = None
             model_examples = model(examples)
+            use_patching = getattr(model, 'use_patching', False)
+            if use_patching:
+                (model_examples, loss_parameters) = model_examples
             #print("-- model_examples:" + str(model_examples.shape))
             #print("-- labels:" + str(labels.shape))
             #print("-- model_example concrete:" + str(model_examples[0][0]))
             #print("-- label concrete:" + str(labels[0]))
-            loss = model.loss_criterion(model_examples, labels)
+            if (loss_parameters is None):
+                loss = model.loss_criterion(model_examples, labels)
+            else:
+                loss = model.loss_criterion(model_examples, labels, loss_parameters)
             if training_hparams.apex_fp16:
                 with apex.amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()

@@ -14,7 +14,7 @@ import platforms.platform
 
 @dataclass
 class Platform(Hparams):
-    num_workers: int = 0
+    num_workers: int = 1
 
     _name: str = 'Platform Hyperparameters'
     _description: str = 'Hyperparameters that control the plaform on which the job is run.'
@@ -107,7 +107,7 @@ class Platform(Hparams):
 
     @staticmethod
     def load_model(path, *args, **kwargs):
-        return torch.load(path, *args, **kwargs)
+        return torch.load(path, *args, **kwargs, weights_only=False)
 
     # Run jobs. Called by the command line interface.
 

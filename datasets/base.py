@@ -4,10 +4,15 @@
 # LICENSE file in the root directory of this source tree.
 
 import abc
+import cv2
+import os
+import nibabel as nib
 import numpy as np
 from PIL import Image
 import torch
 import torchvision
+import matplotlib.pyplot as plt
+import einops
 
 from platforms.platform import get_platform
 
@@ -85,6 +90,98 @@ class Dataset(abc.ABC, torch.utils.data.Dataset):
 
         return self._examples[index], self._labels[index]
 
+class NiftiDataset(Dataset):
+    def __init__(self, examples_location: str, labels_location: str, is_training_set: bool):
+
+        self._examples_location = examples_location
+        self._labels_location = labels_location
+        self._example_files = sorted([
+            f for f in os.listdir(examples_location) if f.endswith('.nii') or f.endswith('.nii.gz')
+        ])
+        self._is_training_set = is_training_set
+
+        self._cached_example = None
+        self._cached_label = None
+        self._cached_file_index = None
+
+    def __len__(self):
+        return self.num_train_examples() if self._is_training_set else self.num_test_examples()
+    
+    @abc.abstractmethod
+    def is_2d(self) -> bool: pass
+    
+    @staticmethod
+    @abc.abstractmethod
+    def input_shape() -> tuple: pass
+    
+    def __getitem__(self, index):
+        file_index = index // self.input_shape()[0] if self.is_2d() else index # TODO Check position of depth correct
+        #print("-- indexes: " + str(index) + " file index: " + str(file_index))
+        if self._cached_file_index != file_index:
+            examples_path = os.path.join(self._examples_location, self._example_files[file_index])
+            example = nib.load(examples_path)
+            example = example.get_fdata().astype(np.float32) # h w d c
+
+            #print("-- original shape example:" + str(example.shape))
+            example = einops.rearrange(example[:, :, :, 0], 'h w d -> d h w') #remove 4th dimension - as it is some second scan
+            #print("-- reshaped shape example:" + str(example.shape))
+            example = self.rescale3d(example, False)
+
+            # TODO image preprocessing maybe here
+            # Normalize image (optional)
+            # example = (example - np.min(example)) / (np.max(example) - np.min(example) + 1e-8)
+
+            example = einops.rearrange(example, 'd h w -> 1 d h w')  # add channel dim → (C, D, H, W)
+            #print("-- scaled shape example:" + str(example.shape))
+        
+            label_path = os.path.join(self._labels_location, self._example_files[file_index])
+            label = nib.load(label_path).get_fdata().astype(np.uint8)
+            #print("-- original shape label:" + str(label.shape))
+            label = einops.rearrange(label, 'h w d -> d h w')
+            #print("-- rearranged shape labels:" + str(label.shape))
+            label = self.rescale3d(label, True)
+            #print("-- scaled shape labels:" + str(label.shape))
+
+            example = torch.from_numpy(example)
+            label = torch.from_numpy(label)
+            self._cached_example = example
+            self._cached_label = label
+            self._cached_file_index = file_index
+        else:
+            example = self._cached_example
+            label = self._cached_label
+
+        if self.is_2d():
+            depth = example.shape[1]
+            slice_index = index % depth
+            #print("-- slice index:" + str(slice_index))
+            example = example[:, slice_index, :, :]  # (C, H, W)
+            label = label[slice_index, :, :]  # (H, W)
+            #print("-- 2d example:" + str(example.shape))
+            #print("-- 2d label:" + str(label.shape))
+        return example, label
+    
+    def rescale3d(self, img: np.ndarray, is_label: bool = False) -> np.ndarray:
+        r"""Rescale input image to fit training size
+            #Args
+                img (numpy): Image data
+                isLabel (numpy): Whether or not data is label
+            #Returns:
+                img (numpy): numpy array
+        """
+
+        interpolation = cv2.INTER_NEAREST if is_label else cv2.INTER_CUBIC
+        shape = self.input_shape()
+        img_resized = np.zeros(shape, dtype=img.dtype)
+        for x in range(img.shape[0]):
+            img_resized[x, :, :] = cv2.resize(img[x, :, :], dsize=(shape[2], shape[1]), interpolation=interpolation)
+        
+        img = img_resized
+        img_resized = np.zeros(shape, dtype=img.dtype)
+        for x in range(img.shape[2]):
+            img_resized[:, :, x] = cv2.resize(img[:, :, x], dsize=(shape[1], shape[0]), interpolation=interpolation)
+
+        return img_resized
 
 class ImageDataset(Dataset):
     @abc.abstractmethod

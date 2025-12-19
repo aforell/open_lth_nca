@@ -5,6 +5,7 @@
 
 import time
 import torch
+import losses.loss_functions as loss_functions
 
 from datasets.base import DataLoader
 from foundations import hparams
@@ -53,6 +54,7 @@ def create_eval_callback(eval_name: str, loader: DataLoader, verbose=False):
     def eval_callback(output_location, step, model, optimizer, logger):
         example_count = torch.tensor(0.0).to(get_platform().torch_device)
         total_loss = torch.tensor(0.0).to(get_platform().torch_device)
+        total_dice = torch.tensor(0.0).to(get_platform().torch_device)
         total_correct = torch.tensor(0.0).to(get_platform().torch_device)
         all_probs, all_labels = [], []
 
@@ -64,7 +66,7 @@ def create_eval_callback(eval_name: str, loader: DataLoader, verbose=False):
         with torch.no_grad():
             for examples, labels in loader:
                 examples = examples.to(get_platform().torch_device)
-                labels = labels.squeeze().to(get_platform().torch_device)
+                labels = labels.to(get_platform().torch_device)
                 output = model(examples)
 
                 probs = torch.softmax(output, dim=1)
@@ -74,6 +76,8 @@ def create_eval_callback(eval_name: str, loader: DataLoader, verbose=False):
                 labels_size = torch.tensor(len(labels), device=get_platform().torch_device)
                 example_count += labels_size
                 total_loss += model.loss_criterion(output, labels) * labels_size
+                dice = loss_functions.dice_score(output, labels)
+                total_dice += dice * labels_size
                 total_correct += correct(labels, output)
 
         # Share the information if distributed.
@@ -81,10 +85,12 @@ def create_eval_callback(eval_name: str, loader: DataLoader, verbose=False):
             torch.distributed.reduce(total_loss, 0, op=torch.distributed.ReduceOp.SUM)
             torch.distributed.reduce(total_correct, 0, op=torch.distributed.ReduceOp.SUM)
             torch.distributed.reduce(example_count, 0, op=torch.distributed.ReduceOp.SUM)
+            torch.distributed.reduce(total_dice, 0, op=torch.distributed.ReduceOp.SUM)
 
         total_loss = total_loss.cpu().item()
         total_correct = total_correct.cpu().item()
         example_count = example_count.cpu().item()
+        total_dice = total_dice.cpu().item()
 
         #TODO check metrics for segmentation
 
@@ -92,11 +98,9 @@ def create_eval_callback(eval_name: str, loader: DataLoader, verbose=False):
         probs = torch.cat(all_probs).numpy()
         labels = torch.cat(all_labels).numpy()
         preds = probs.argmax(axis=1)
-        print("probs shape:", probs.shape)
-        print("labels shape:", labels.shape)
 
         # Metrics
-        macro_f1 = f1_score(labels, preds, average="macro")
+        #macro_f1 = f1_score(labels, preds, average="macro")
         #pr_auc = average_precision_score(labels, probs, average="macro")
         #roc_auc = roc_auc_score(labels, probs, multi_class="ovr", average="macro")
 
@@ -112,7 +116,8 @@ def create_eval_callback(eval_name: str, loader: DataLoader, verbose=False):
             logger.add('{}_loss'.format(eval_name), step, total_loss / example_count)
             logger.add('{}_accuracy'.format(eval_name), step, total_correct / example_count)
             logger.add('{}_examples'.format(eval_name), step, example_count)
-            logger.add('{}_macro_f1'.format(eval_name), step, macro_f1)
+            logger.add('{}_dice'.format(eval_name), step, total_dice / example_count)
+            #logger.add('{}_macro_f1'.format(eval_name), step, macro_f1)
             #logger.add('{}_pr_auc'.format(eval_name), step, pr_auc)
             #logger.add('{}_roc_auc'.format(eval_name), step, roc_auc)
             logger.add('{}_vram_alloc'.format(eval_name), step, vram_alloc)
@@ -123,9 +128,9 @@ def create_eval_callback(eval_name: str, loader: DataLoader, verbose=False):
                 nonlocal time_of_last_call
                 nonlocal total_time
                 elapsed = 0 if time_of_last_call is None else time.time() - time_of_last_call
-                print('{}\tep {:03d}\tit {:03d}\tloss {:.3f}\tacc {:.2f}%\tex {:d}\ttime {:.2f}s'.format(
+                print('{}\tep {:03d}\tit {:03d}\tloss {:.3f}\tacc {:.2f}%\tdice {:.3f}\tex {:d}\ttime {:.2f}s'.format(
                     eval_name, step.ep, step.it, total_loss/example_count, 100 * total_correct/example_count,
-                    int(example_count), elapsed))
+                    total_dice/example_count, int(example_count), elapsed))
                 time_of_last_call = time.time()
                 total_time = 0 if total_time is None else total_time + elapsed
                 logger.add('{}_total_time'.format(eval_name), step, total_time)

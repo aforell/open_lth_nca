@@ -43,7 +43,8 @@ class Model(torch.nn.Module):
 
         return [name + '.weight' for name, module in self.named_modules() if
                 isinstance(module, torch.nn.modules.conv.Conv2d) or
-                isinstance(module, torch.nn.modules.linear.Linear)]
+                isinstance(module, torch.nn.modules.linear.Linear) or
+                isinstance(module, torch.nn.modules.conv.Conv3d)]
 
     @property
     @abc.abstractmethod

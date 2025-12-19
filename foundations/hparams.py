@@ -21,7 +21,7 @@ class Hparams(abc.ABC):
 
     def __post_init__(self):
         if not hasattr(self, '_name'): raise ValueError('Must have field _name with string value.')
-        if not hasattr(self, '_description'): raise ValueError('Must have field _name with string value.')
+        if not hasattr(self, '_description'): raise ValueError('Must have field _description with string value.')
 
     @classmethod
     def add_args(cls, parser, defaults: 'Hparams' = None, prefix: str = None,
@@ -135,6 +135,15 @@ class ModelHparams(Hparams):
     output_frozen: bool = False
     others_frozen: bool = False
     others_frozen_exceptions: str = None
+    nca_steps: int = 1
+    nca_steps_high_res: int = 10
+    nca_steps_low_res: int = 40
+    hidden_size: int = 128
+    fire_rate: float = 0.5
+    input_channel_num: int = 1
+    state_channel_num: int = 16
+    scale_factor: int = 4
+    use_patching: bool = False
 
     _name: str = 'Model Hyperparameters'
     _description: str = 'Hyperparameters that select the model, initialization, and weight freezing.'
@@ -145,6 +154,14 @@ class ModelHparams(Hparams):
     _output_frozen: str = 'If True, all outputt layer parameters are frozen at initialization.'
     _others_frozen: str = 'If true, all other (non-output, non-batchnorm) parameters are frozen at initialization.'
     _others_frozen_exceptions: str = 'A comma-separated list of any tensors that should not be frozen.'
+    _nca_steps: str = 'The number of NCA update steps to perform per forward pass.'
+    _nca_steps_high_res: str = 'The number of NCA update steps to perform per forward pass at high resolution (Med-NCA).'
+    _hidden_size: str = 'The size of the hidden linear layers.'
+    _fire_rate: str = 'The probability of updating each cell at each NCA step.'
+    _input_channel_num: str = 'The number of input channels.'
+    _state_channel_num: str = 'The total number of state channels.'
+    _scale_factor: str = 'The scale factor for downsampling and upsampling in Med-NCA.'
+    _use_patching: str = 'If True, use random cropping during training as in the Med-NCA paper.'
 
 
 @dataclass
